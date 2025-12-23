@@ -1,0 +1,21 @@
+{
+  "name": "rd-lambda",
+  "version": "1.0.0",
+  "description": "",
+  "main": "lambda.js",
+  "scripts": {
+    "start": "NODE_PATH=./app nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "aws-sdk": "^2.1693.0",
+    "axios": "^1.13.2",
+    "dotenv": "^17.2.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}

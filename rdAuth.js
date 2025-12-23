@@ -41,9 +41,7 @@ const getAccessTokenFromRefresh = async () => {
     })
 
     const response = await axios.post(RD_AUTH_URL, params, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       timeout: 10000,
     })
 
@@ -52,19 +50,23 @@ const getAccessTokenFromRefresh = async () => {
 
     if (!access_token) throw new Error('access_token not returned by RD')
 
-    const rotated = refresh_token && refresh_token !== old_refresh_token
+    const rotated = !!(refresh_token && refresh_token !== old_refresh_token)
 
-    let persistStatus = {
+    let persist_status = {
       env_updated: false,
       lambda_updated: false,
       reason: 'no_rotation',
     }
 
     if (rotated) {
-      if (RD_DEBUG)
+      if (RD_DEBUG) {
         console.log('♻️ Refresh token rotacionou:', mask(refresh_token, 8))
+      }
 
-      persist_status = persistNewRefreshToken(refresh_token, old_refresh_token)
+      persist_status = await persistNewRefreshToken(
+        refresh_token,
+        old_refresh_token
+      )
 
       // Atualiza variável do processo atual
       process.env.RD_CRM_REFRESH_TOKEN = refresh_token
@@ -122,7 +124,6 @@ const updateRefreshTokenInLambda = async (
 
     const lambda = new AWS.Lambda()
 
-    // Get current environment variables
     const response = await lambda
       .getFunctionConfiguration({ FunctionName: lambdaFunctionName })
       .promise()
@@ -130,7 +131,6 @@ const updateRefreshTokenInLambda = async (
     const currentEnv = response.Environment?.Variables || {}
     currentEnv.RD_CRM_REFRESH_TOKEN = newRefreshToken
 
-    // Update Lambda configuration
     await lambda
       .updateFunctionConfiguration({
         FunctionName: lambdaFunctionName,
@@ -141,17 +141,19 @@ const updateRefreshTokenInLambda = async (
     console.info(
       `Successfully updated refresh token in Lambda: ${lambdaFunctionName}`
     )
-
     return true
   } catch (error) {
-    console.warn('Failed to update Lambda environment:', error)
+    console.warn(
+      'Failed to update Lambda environment:',
+      error?.message || error
+    )
     return false
   }
 }
 
 const persistNewRefreshToken = async (newRefreshToken, oldRefreshToken) => {
   if (!newRefreshToken || newRefreshToken === oldRefreshToken) {
-    return { envUpdated: false, lambdaUpdated: false, reason: 'no_rotation' }
+    return { env_updated: false, lambda_updated: false, reason: 'no_rotation' }
   }
 
   const env_updated = updateRefreshTokenInEnvFile(newRefreshToken)

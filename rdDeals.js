@@ -2,6 +2,20 @@
 
 const axios = require('axios')
 
+const DEALS_URL =
+  process.env.RD_API_URL_DEALS || 'https://api.rd.services/crm/v2/deals'
+
+const extractDealEssentials = deal => {
+  return {
+    id: deal?.id ?? null,
+    name: deal?.name ?? null,
+    total_price: deal?.total_price ?? deal?.amount ?? null,
+    status: deal?.status ?? null,
+    owner_id: deal?.owner_id ?? deal?.owner?.id ?? null,
+    contacts_id: deal.contact_ids,
+  }
+}
+
 const getDealsByContactId = async (access_token, contactId) => {
   const headers = {
     Authorization: `Bearer ${access_token}`,
@@ -9,7 +23,7 @@ const getDealsByContactId = async (access_token, contactId) => {
   }
 
   const params = {
-    filter: `contacts.id:${contactId}`,
+    filter: `contact_id:${contactId} AND (status:ongoing OR status:paused)`,
     'page[number]': 1,
     'page[size]': 25,
   }
@@ -22,7 +36,10 @@ const getDealsByContactId = async (access_token, contactId) => {
     })
 
     const payload = response.data || {}
-    const deals = Array.isArray(payload.deals) ? payload.deals : []
+    const rawDeals = Array.isArray(payload.data) ? payload.data : []
+
+    // 🔹 só campos essenciais
+    const deals = rawDeals.map(extractDealEssentials)
 
     return {
       error: false,

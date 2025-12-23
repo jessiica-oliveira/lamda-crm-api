@@ -3,10 +3,8 @@
 const { normalizePhone, mask } = require('./utils')
 const { getAccessTokenFromRefresh } = require('./rdAuth')
 const { getContactsByPhone } = require('./rdContacts')
+const { getDealsByContactId } = require('./rdDeals')
 
-/**
- * Lambda Handler
- */
 exports.handler = async (event, context) => {
   try {
     const debug = !!process.env.RD_DEBUG
@@ -14,14 +12,9 @@ exports.handler = async (event, context) => {
       console.log('🔎 DEBUG ativo')
       console.log('Event recebido:', JSON.stringify(event))
     }
-
-    /* ===============================
-       NORMALIZA BODY
-       Aceita:
-       - event.body (API Gateway)
-       - event direto (execução local)
-       - string JSON
-    =============================== */
+    /* ------------------------------------------------------------------
+     * 1) Normalização do body (string / object / base64)
+     * ------------------------------------------------------------------ */
     let bodyStr
 
     if (typeof event === 'string') {
@@ -38,17 +31,24 @@ exports.handler = async (event, context) => {
 
     const body = typeof bodyStr === 'string' ? JSON.parse(bodyStr) : bodyStr
 
-    // VALIDA PHONE
+    /* ------------------------------------------------------------------
+     * 2) Extrair e normalizar telefone
+     * ------------------------------------------------------------------ */
     const phoneRaw = body?.contact?.phone
-    if (!phoneRaw)
+    const email = body?.contact?.email
+
+    if (!phoneRaw) {
       return {
         statusCode: 400,
         body: JSON.stringify({ error: 'contact.phone not found' }),
       }
+    }
 
     const phone = normalizePhone(phoneRaw)
 
-    // TOKEN: ENV OU REFRESH
+    /* ------------------------------------------------------------------
+     * 3) Resolver access_token (env → refresh → fallback)
+     * ------------------------------------------------------------------ */
     const envAccess =
       process.env.access_token || process.env.RD_CRM_ACCESS_TOKEN
 
@@ -67,47 +67,41 @@ exports.handler = async (event, context) => {
       tokenInfo.access_token_preview = mask(accessToken)
     }
 
+    /* ------------------------------------------------------------------
+     * 4) Buscar contatos pelo telefone
+     * ------------------------------------------------------------------ */
     let contactsResult = null
 
-    // BUSCA CONTATOS
     if (accessToken) {
-      contactsResult = await getContactsByPhone(accessToken, phone)
+      contactsResult = await getContactsByPhone(accessToken, phone, email)
 
-      // Token inválido → tenta refresh
+      // Token expirado → tenta refresh fallback
       if (
         contactsResult?.error &&
         contactsResult?.status === 401 &&
         process.env.RD_CRM_REFRESH_TOKEN
       ) {
-        try {
-          const newTokenInfo = await getAccessTokenFromRefresh()
-
-          accessToken = newTokenInfo.access_token
-          tokenInfo.access_token_source = 'refresh_fallback'
-          tokenInfo.access_token_preview = mask(accessToken)
-          tokenInfo.refresh_token_rotated = newTokenInfo.refresh_token_rotated
-          tokenInfo.refresh_token_persist_status = newTokenInfo.persist_status
-
-          contactsResult = await getContactsByPhone(accessToken, phone)
-        } catch (err) {
-          contactsResult.refresh_error = err.message
-        }
-      }
-    } else {
-      // Sem token no env → refresh direto
-      try {
         const newTokenInfo = await getAccessTokenFromRefresh()
 
         accessToken = newTokenInfo.access_token
-        tokenInfo.access_token_source = 'refresh'
+        tokenInfo.access_token_source = 'refresh_fallback'
         tokenInfo.access_token_preview = mask(accessToken)
         tokenInfo.refresh_token_rotated = newTokenInfo.refresh_token_rotated
         tokenInfo.refresh_token_persist_status = newTokenInfo.persist_status
 
-        contactsResult = await getContactsByPhone(accessToken, phone)
-      } catch (err) {
-        return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+        contactsResult = await getContactsByPhone(accessToken, phone, email)
       }
+    } else {
+      // Não tem token env → refresh direto
+      const newTokenInfo = await getAccessTokenFromRefresh()
+
+      accessToken = newTokenInfo.access_token
+      tokenInfo.access_token_source = 'refresh'
+      tokenInfo.access_token_preview = mask(accessToken)
+      tokenInfo.refresh_token_rotated = newTokenInfo.refresh_token_rotated
+      tokenInfo.refresh_token_persist_status = newTokenInfo.persist_status
+
+      contactsResult = await getContactsByPhone(accessToken, phone, email)
     }
 
     if (!contactsResult) {
@@ -117,24 +111,67 @@ exports.handler = async (event, context) => {
       }
     }
 
+    /* ------------------------------------------------------------------
+     * 5) Montar resposta base
+     * ------------------------------------------------------------------ */
     const responseBody = { phone_normalized: phone, ...tokenInfo }
 
     if (contactsResult.error) {
-      responseBody.error = contactsResult.message || 'request failed'
+      responseBody.error = contactsResult.message || 'contacts error'
       if (contactsResult.status)
         responseBody.error_status = contactsResult.status
       if (contactsResult.details)
         responseBody.error_details = contactsResult.details
-      if (contactsResult.refresh_error)
-        responseBody.refresh_error = contactsResult.refresh_error
-    } else {
-      responseBody.contacts_found = contactsResult.total
-      responseBody.contacts = contactsResult.contacts
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify(responseBody),
+      }
     }
 
-    return { statusCode: 200, body: JSON.stringify(responseBody) }
+    /* ------------------------------------------------------------------
+     * 6) Buscar deals para TODOS os contact_ids (IDs únicos)
+     * ------------------------------------------------------------------ */
+    responseBody.contacts_found = contactsResult.total
+    responseBody.contacts = contactsResult.contacts
+
+    const contacts = contactsResult.contacts || []
+    const contactIds = [...new Set(contacts.map(c => c?.id).filter(Boolean))]
+
+    const dealsByContactId = {}
+
+    await Promise.all(
+      contactIds.map(async contactId => {
+        const dealsRes = await getDealsByContactId(accessToken, contactId)
+
+        // Mapa { contact_id -> deals[] | erro }
+        if (dealsRes.error) {
+          dealsByContactId[contactId] = {
+            error: true,
+            message: dealsRes.message,
+            status: dealsRes.status,
+            details: dealsRes.details,
+          }
+        }
+
+        if (Array.isArray(dealsRes.deals) && dealsRes.deals.length > 0) {
+          dealsByContactId[contactId] = dealsRes.deals
+        }
+      })
+    )
+
+    responseBody.deals_by_contact_id = dealsByContactId
+    responseBody.deals_contacts_checked = contactIds.length
+
+    /* ------------------------------------------------------------------
+     * 7) Retorno final
+     * ------------------------------------------------------------------ */
+    return {
+      statusCode: 200,
+      body: JSON.stringify(responseBody),
+    }
   } catch (err) {
-    console.error('❌ Unhandled exception', err)
+    console.error('❌ Unhandled exception:', err)
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
   }
 }
@@ -144,12 +181,14 @@ if (require.main === module) {
   require('dotenv').config()
 
   const sampleEvent = {
-    body: JSON.stringify({ contact: { phone: '11984196634' } }),
+    body: JSON.stringify({
+      contact: { phone: '11984196634', email: 'sabrina.honorato19@gmail.com' },
+    }),
   }
 
   console.log('▶️ Rodando localmente...')
   exports
     .handler(sampleEvent)
-    .then(res => console.log(JSON.parse(res.body)))
+    .then(res => console.dir(JSON.parse(res.body), { depth: null }))
     .catch(console.error)
 }

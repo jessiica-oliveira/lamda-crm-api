@@ -5,9 +5,6 @@ const axios = require('axios')
 const CONTACTS_URL =
   process.env.RD_API_URL || 'https://api.rd.services/crm/v2/contacts'
 
-const DEALS_URL =
-  process.env.RD_API_URL_DEALS || 'https://api.rd.services/crm/v2/deals'
-
 const pickFirst = (arr, key) => {
   if (!Array.isArray(arr) || arr.length === 0) return null
 
@@ -18,14 +15,14 @@ const pickFirst = (arr, key) => {
   return first ?? null
 }
 
-const getContactsByPhone = async (access_token, phone) => {
+const getContactsByPhone = async (access_token, phone, email) => {
   const headers = {
     Authorization: `Bearer ${access_token}`,
     'Content-Type': 'application/json',
   }
 
   const params = {
-    filter: `phone:${phone}`,
+    filter: `phone:${phone} AND email:${email}`,
     'page[number]': 1,
     'page[size]': 25,
   }
