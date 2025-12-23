@@ -4,6 +4,7 @@ const { normalizePhone, mask } = require('./utils')
 const { getAccessTokenFromRefresh } = require('./rdAuth')
 const { getContactsByPhone } = require('./rdContacts')
 const { getDealsByContactId } = require('./rdDeals')
+const { getUserById } = require('./rdUsers')
 
 exports.handler = async (event, context) => {
   try {
@@ -35,12 +36,19 @@ exports.handler = async (event, context) => {
      * 2) Extrair e normalizar telefone
      * ------------------------------------------------------------------ */
     const phoneRaw = body?.contact?.phone
-    const email = body?.contact?.email
+    const emailRaw = body?.contact?.email || null
 
     if (!phoneRaw) {
       return {
         statusCode: 400,
         body: JSON.stringify({ error: 'contact.phone not found' }),
+      }
+    }
+
+    if (!emailRaw) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: 'contact.email not found' }),
       }
     }
 
@@ -73,7 +81,7 @@ exports.handler = async (event, context) => {
     let contactsResult = null
 
     if (accessToken) {
-      contactsResult = await getContactsByPhone(accessToken, phone, email)
+      contactsResult = await getContactsByPhone(accessToken, phone, emailRaw)
 
       // Token expirado → tenta refresh fallback
       if (
@@ -89,7 +97,7 @@ exports.handler = async (event, context) => {
         tokenInfo.refresh_token_rotated = newTokenInfo.refresh_token_rotated
         tokenInfo.refresh_token_persist_status = newTokenInfo.persist_status
 
-        contactsResult = await getContactsByPhone(accessToken, phone, email)
+        contactsResult = await getContactsByPhone(accessToken, phone, emailRaw)
       }
     } else {
       // Não tem token env → refresh direto
@@ -114,7 +122,11 @@ exports.handler = async (event, context) => {
     /* ------------------------------------------------------------------
      * 5) Montar resposta base
      * ------------------------------------------------------------------ */
-    const responseBody = { phone_normalized: phone, ...tokenInfo }
+    const responseBody = {
+      phone_normalized: phone,
+      input_email: emailRaw,
+      ...tokenInfo,
+    }
 
     if (contactsResult.error) {
       responseBody.error = contactsResult.message || 'contacts error'
@@ -144,7 +156,6 @@ exports.handler = async (event, context) => {
       contactIds.map(async contactId => {
         const dealsRes = await getDealsByContactId(accessToken, contactId)
 
-        // Mapa { contact_id -> deals[] | erro }
         if (dealsRes.error) {
           dealsByContactId[contactId] = {
             error: true,
@@ -162,9 +173,50 @@ exports.handler = async (event, context) => {
 
     responseBody.deals_by_contact_id = dealsByContactId
     responseBody.deals_contacts_checked = contactIds.length
+    responseBody.deals_contacts_with_deals =
+      Object.keys(dealsByContactId).length
 
     /* ------------------------------------------------------------------
-     * 7) Retorno final
+     * 7) Buscar owners (users) a partir dos deals (owner_id)
+     * ------------------------------------------------------------------ */
+    const ownerIds = new Set()
+
+    for (const deals of Object.values(dealsByContactId)) {
+      if (!Array.isArray(deals)) continue
+      for (const d of deals) {
+        if (d?.owner_id) ownerIds.add(d.owner_id)
+      }
+    }
+
+    const ownersById = {}
+
+    await Promise.all(
+      [...ownerIds].map(async ownerId => {
+        const userRes = await getUserById(accessToken, ownerId)
+
+        if (userRes.error) {
+          ownersById[ownerId] = {
+            error: true,
+            message: userRes.message,
+            status: userRes.status,
+            details: userRes.details,
+          }
+          return
+        }
+
+        const u = userRes.user || {}
+        ownersById[ownerId] = {
+          name: u.data.name ?? null,
+          email: u.data.email ?? null,
+        }
+      })
+    )
+
+    responseBody.owners_by_id = ownersById
+    responseBody.owners_checked = ownerIds.size
+
+    /* ------------------------------------------------------------------
+     * 8) Retorno final
      * ------------------------------------------------------------------ */
     return {
       statusCode: 200,
@@ -172,11 +224,14 @@ exports.handler = async (event, context) => {
     }
   } catch (err) {
     console.error('❌ Unhandled exception:', err)
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: err.message }),
+    }
   }
 }
 
-//EXECUÇÃO LOCAL
+// EXECUÇÃO LOCAL
 if (require.main === module) {
   require('dotenv').config()
 
