@@ -45,13 +45,6 @@ exports.handler = async (event, context) => {
       }
     }
 
-    if (!emailRaw) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'contact.email not found' }),
-      }
-    }
-
     const phone = normalizePhone(phoneRaw)
 
     /* ------------------------------------------------------------------
@@ -109,7 +102,7 @@ exports.handler = async (event, context) => {
       tokenInfo.refresh_token_rotated = newTokenInfo.refresh_token_rotated
       tokenInfo.refresh_token_persist_status = newTokenInfo.persist_status
 
-      contactsResult = await getContactsByPhone(accessToken, phone, email)
+      contactsResult = await getContactsByPhone(accessToken, phone, emailRaw)
     }
 
     if (!contactsResult) {
@@ -195,25 +188,31 @@ exports.handler = async (event, context) => {
         const userRes = await getUserById(accessToken, ownerId)
 
         if (userRes.error) {
-          ownersById[ownerId] = {
-            error: true,
-            message: userRes.message,
-            status: userRes.status,
-            details: userRes.details,
-          }
+          ownersById[ownerId] = { name: null, email: null }
           return
         }
 
         const u = userRes.user || {}
         ownersById[ownerId] = {
-          name: u.data.name ?? null,
-          email: u.data.email ?? null,
+          name: u?.data?.name ?? null,
+          email: u?.data?.email ?? null,
         }
       })
     )
 
-    responseBody.owners_by_id = ownersById
-    responseBody.owners_checked = ownerIds.size
+    for (const [contactId, deals] of Object.entries(dealsByContactId)) {
+      if (!Array.isArray(deals)) continue
+
+      dealsByContactId[contactId] = deals.map(item => {
+        const owner = item?.owner_id ? ownersById[item.owner_id] : null
+
+        return {
+          ...item,
+          owner_name: owner?.name ?? null,
+          owner_email: owner?.email ?? null,
+        }
+      })
+    }
 
     /* ------------------------------------------------------------------
      * 8) Retorno final
@@ -247,3 +246,6 @@ if (require.main === module) {
     .then(res => console.dir(JSON.parse(res.body), { depth: null }))
     .catch(console.error)
 }
+
+// pega o proximo aleatorio ou o primeiro da lista
+// ou procura se o owner tá visivel

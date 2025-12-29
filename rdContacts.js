@@ -21,8 +21,10 @@ const getContactsByPhone = async (access_token, phone, email) => {
     'Content-Type': 'application/json',
   }
 
+  const filter = email ? `phone:${phone} AND email:${email}` : `phone:${phone}`
+
   const params = {
-    filter: `phone:${phone} AND email:${email}`,
+    filter,
     'page[number]': 1,
     'page[size]': 25,
   }

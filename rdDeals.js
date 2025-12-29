@@ -12,7 +12,7 @@ const extractDealEssentials = deal => {
     total_price: deal?.total_price ?? deal?.amount ?? null,
     status: deal?.status ?? null,
     owner_id: deal?.owner_id ?? deal?.owner?.id ?? null,
-    contacts_id: deal.contact_ids,
+    // contacts_id: deal.contact_ids,
   }
 }
 
