@@ -5,3 +5,4 @@ node_modules/
 .eslintrc.json
 .prettierrc
 .prettierignore
+local.js

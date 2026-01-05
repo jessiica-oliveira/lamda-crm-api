@@ -60,6 +60,37 @@ const getDealsByContactId = async (access_token, contactId) => {
   }
 }
 
+const updateDealOwner = async (access_token, dealId, newOwnerId) => {
+  const headers = {
+    Authorization: `Bearer ${access_token}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  }
+
+  const body = { owner_id: newOwnerId }
+
+  try {
+    const response = await axios.put(`${DEALS_URL}/${dealId}`, body, {
+      headers,
+      timeout: 10000,
+    })
+
+    return { error: false, deal: response.data }
+  } catch (error) {
+    if (error.response) {
+      return {
+        error: true,
+        message: `API returned ${error.response.status}`,
+        status: error.response.status,
+        details: error.response.data,
+      }
+    }
+
+    return { error: true, message: error.message }
+  }
+}
+
 module.exports = {
   getDealsByContactId,
+  updateDealOwner,
 }
